@@ -13,4 +13,4 @@ CREATE TABLE users(id int identity(1,1), username varchar(255), password varchar
 
 CREATE TABLE messages(id int identity(1,1), from_user_id int, to_user_id int, text varchar(2096), time datetime, PRIMARY KEY(id), FOREIGN KEY(from_user_id) REFERENCES users(id), FOREIGN KEY(to_user_id) REFERENCES users(id));
 
-INSERT INTO users(id, username, password, is_male) values(0, 'broadcast', '', 1);
+INSERT INTO users(username, password, is_male) values('broadcast', '', 1);

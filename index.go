@@ -11,16 +11,19 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const driverName = "mssql"
-const dataSourceConnectionString = "server=localhost;user id=sa;password=testtest1!"
+const dataSourceConnectionString = "server=localhost;Database=chat;user id=sa;password=testtest1!"
+const maxDatabaseConnections = 50
 const broadcastName = "broadcast"
 
 const SQL_SELECT_USER_BY_USERNAME = "select id from users where username = $1"
 const SQL_INSERT_USER = "insert into users(username, password, is_male) values($1, $2, $3)"
 const SQL_INSERT_MESSAGE = "insert into messages(from_user_id, to_user_id, text, time) values($1, $2, $3, DATEADD(MILLISECOND, $4 % 1000, DATEADD(SECOND, $4 / 1000, '19700101')))"
 
+var condb = getDatabaseConnection()
 var jwtKey = []byte("my_secret_key")
 
 var activeUsers = make(map[int64]*websocket.Conn)
@@ -52,15 +55,30 @@ func getDatabaseConnection() *sql.DB {
 	if errdb != nil {
 		panic("Error open db")
 	}
+	condb.SetMaxOpenConns(maxDatabaseConnections)
 	return condb
 }
-func initBroadcastId(condb *sql.DB) {
-	rows, err := condb.Query(SQL_SELECT_USER_BY_USERNAME, broadcastName)
+func getUserByUsername(username string) User {
+	rows, err := condb.Query(SQL_SELECT_USER_BY_USERNAME, username)
+	defer rows.Close()
 	if err != nil {
 		fmt.Print(err)
 		log.Fatal(err)
 	}
+	user := User{}
+	for rows.Next() {
+		rows.Scan(&user)
+		return user
+	}
+	return user
+}
+func initBroadcastId() {
+	rows, err := condb.Query(SQL_SELECT_USER_BY_USERNAME, broadcastName)
 	defer rows.Close()
+	if err != nil {
+		fmt.Print(err)
+		log.Fatal(err)
+	}
 	for rows.Next() {
 		rows.Scan(&broadcastId)
 		return
@@ -72,7 +90,7 @@ func insertMessage(condb *sql.DB, message Message) error {
 	return err
 }
 
-func initWebSocketListeners(condb *sql.DB) {
+func initWebSocketListeners() {
 	var upgrader = websocket.Upgrader{
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
@@ -120,12 +138,25 @@ func initWebSocketListeners(condb *sql.DB) {
 		}
 	})
 }
+func hashPassword(password string) (string, error) {
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
+	return string(bytes), err
+}
+
+func checkPasswordHash(password, hash string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+	return err == nil
+}
 func register(condb *sql.DB, user User) error {
-	// todo save hashed password
-	_, err := condb.Exec(SQL_INSERT_USER, user.Username, user.Password, user.IsMale)
+	password, err := hashPassword(user.Password)
+	condb.Exec(SQL_INSERT_USER, user.Username, password, user.IsMale)
 	return err
 }
-func initHttpListeners(condb *sql.DB) {
+func login(credentials Credentials) bool {
+	user := getUserByUsername(credentials.Username)
+	return user.Username != "" && checkPasswordHash(credentials.Password, user.Password)
+}
+func initHttpListeners() {
 	http.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := ioutil.ReadAll(r.Body)
 		user := User{}
@@ -148,9 +179,7 @@ func initHttpListeners(condb *sql.DB) {
 
 func main() {
 	// todo: create connection pool
-	condb := getDatabaseConnection()
-	defer condb.Close()
-	initBroadcastId(condb)
-	initWebSocketListeners(condb)
-	initHttpListeners(condb)
+	initBroadcastId()
+	initWebSocketListeners()
+	initHttpListeners()
 }
