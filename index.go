@@ -190,8 +190,8 @@ func enableCors(w *http.ResponseWriter) {
 }
 func initHttpListeners() {
 	http.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
+		enableCors(&w)
 		if r.Method == http.MethodPost {
-			enableCors(&w)
 			user := User{}
 			err := json.NewDecoder(r.Body).Decode(&user)
 			fmt.Print(err)
@@ -199,19 +199,18 @@ func initHttpListeners() {
 				w.WriteHeader(http.StatusInternalServerError)
 			} else {
 				token := generateJwtToken(user.Username)
-				w.Header().Set("Authorization", token)
+				w.Write([]byte("{\"token\": \"" + token + "\"}"))
 			}
 		}
 	})
 	http.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		enableCors(&w)
 		if r.Method == http.MethodPost {
-			enableCors(&w)
 			credentials := Credentials{}
 			json.NewDecoder(r.Body).Decode(&credentials)
 			isLoggedIn := login(credentials)
 			if isLoggedIn {
 				token := generateJwtToken(credentials.Username)
-				w.Header().Set("Authorization", token)
 				w.Write([]byte("{\"token\": \"" + token + "\"}"))
 			}
 		}
@@ -226,6 +225,7 @@ func initHttpListeners() {
 	http.ListenAndServe(":8095", nil)
 }
 
+// todo: add filter to check server permisisons
 func main() {
 	initBroadcastId()
 	initWebSocketListeners()
