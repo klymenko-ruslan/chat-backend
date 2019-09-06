@@ -7,12 +7,10 @@ import (
 	"fmt"
 	_ "github.com/denisenkom/go-mssqldb"
 	"github.com/gorilla/websocket"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"strings"
 	"golang.org/x/crypto/bcrypt"
-	"strconv"
 	"time"
 	"github.com/dgrijalva/jwt-go"
 )
@@ -176,7 +174,7 @@ func checkTokenValidity(tknStr string) bool {
 	})
 	return !tkn.Valid
 }
-func register(condb *sql.DB, user User) error {
+func register(user User) error {
 	password, err := hashPassword(user.Password)
 	condb.Exec(SQL_INSERT_USER, user.Username, password, user.IsMale)
 	return err
@@ -185,29 +183,38 @@ func login(credentials Credentials) bool {
 	user := getUserByUsername(credentials.Username)
 	return user.Username != "" && checkPasswordHash(credentials.Password, user.Password)
 }
+func enableCors(w *http.ResponseWriter) {
+	(*w).Header().Set("Access-Control-Allow-Origin", "*")
+	(*w).Header().Set("Access-Control-Allow-Methods", "*")
+	(*w).Header().Set("Access-Control-Allow-Headers", "Access-Control-Allow-Origin, Content-Type, Accept, Accept-Language, Origin, User-Agent")
+}
 func initHttpListeners() {
 	http.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
-		body, _ := ioutil.ReadAll(r.Body)
-		user := User{}
-		json.Unmarshal(body, &user)
-		if err := register(condb, user); err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-		} else {
-			token := generateJwtToken(user.Username)
-			w.Header().Set("Authorization", token)
+		if r.Method == http.MethodPost {
+			enableCors(&w)
+			user := User{}
+			err := json.NewDecoder(r.Body).Decode(&user)
+			fmt.Print(err)
+			if err := register(user); err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+			} else {
+				token := generateJwtToken(user.Username)
+				w.Header().Set("Authorization", token)
+			}
 		}
 	})
 	http.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
-		credentials := Credentials{}
-		json.NewDecoder(r.Body).Decode(&credentials)
-		if !login(credentials) {
-
-		} else {
-			token := generateJwtToken(credentials.Username)
-			w.Header().Set("Authorization", token)
+		if r.Method == http.MethodPost {
+			enableCors(&w)
+			credentials := Credentials{}
+			json.NewDecoder(r.Body).Decode(&credentials)
+			isLoggedIn := login(credentials)
+			if isLoggedIn {
+				token := generateJwtToken(credentials.Username)
+				w.Header().Set("Authorization", token)
+				w.Write([]byte("{\"token\": \"" + token + "\"}"))
+			}
 		}
-
-		w.Write([]byte(strconv.FormatBool(login(credentials))))
 	})
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "websocket2.html")
