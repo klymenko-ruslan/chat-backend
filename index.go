@@ -12,6 +12,9 @@ import (
 	"net/http"
 	"strings"
 	"golang.org/x/crypto/bcrypt"
+	"strconv"
+	"time"
+	"github.com/dgrijalva/jwt-go"
 )
 
 const driverName = "mssql"
@@ -19,7 +22,10 @@ const dataSourceConnectionString = "server=localhost;Database=chat;user id=sa;pa
 const maxDatabaseConnections = 50
 const broadcastName = "broadcast"
 
-const SQL_SELECT_USER_BY_USERNAME = "select id from users where username = $1"
+// todo: list of users for chats
+const SQL_SELECT_USERS = "select username, password, is_male from users"
+const SQL_SELECT_USER_BY_USERNAME = "select username, password, is_male from users where username = $1"
+const SQL_SELECT_USER_ID_BY_USERNAME = "select id from users where username = $1"
 const SQL_INSERT_USER = "insert into users(username, password, is_male) values($1, $2, $3)"
 const SQL_INSERT_MESSAGE = "insert into messages(from_user_id, to_user_id, text, time) values($1, $2, $3, DATEADD(MILLISECOND, $4 % 1000, DATEADD(SECOND, $4 / 1000, '19700101')))"
 
@@ -49,6 +55,10 @@ type Message struct {
 	Text string
 	Time int64
 }
+type Claims struct {
+	Username string
+	jwt.StandardClaims
+}
 
 func getDatabaseConnection() *sql.DB {
 	condb, errdb := sql.Open(driverName, dataSourceConnectionString)
@@ -67,13 +77,13 @@ func getUserByUsername(username string) User {
 	}
 	user := User{}
 	for rows.Next() {
-		rows.Scan(&user)
+		rows.Scan(&user.Username, &user.Password, &user.IsMale)
 		return user
 	}
 	return user
 }
 func initBroadcastId() {
-	rows, err := condb.Query(SQL_SELECT_USER_BY_USERNAME, broadcastName)
+	rows, err := condb.Query(SQL_SELECT_USER_ID_BY_USERNAME, broadcastName)
 	defer rows.Close()
 	if err != nil {
 		fmt.Print(err)
@@ -147,6 +157,25 @@ func checkPasswordHash(password, hash string) bool {
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
 	return err == nil
 }
+func generateJwtToken(username string) string {
+	expirationTime := time.Now().Add(500 * time.Hour)
+	claims := &Claims{
+		Username: username,
+		StandardClaims: jwt.StandardClaims{
+			ExpiresAt: expirationTime.Unix(),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, _ := token.SignedString(jwtKey)
+	return tokenString
+}
+func checkTokenValidity(tknStr string) bool {
+	claims := &Claims{}
+	tkn, _ := jwt.ParseWithClaims(tknStr, claims, func(token *jwt.Token) (interface{}, error) {
+		return jwtKey, nil
+	})
+	return !tkn.Valid
+}
 func register(condb *sql.DB, user User) error {
 	password, err := hashPassword(user.Password)
 	condb.Exec(SQL_INSERT_USER, user.Username, password, user.IsMale)
@@ -161,11 +190,24 @@ func initHttpListeners() {
 		body, _ := ioutil.ReadAll(r.Body)
 		user := User{}
 		json.Unmarshal(body, &user)
-		register(condb, user)
+		if err := register(condb, user); err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+		} else {
+			token := generateJwtToken(user.Username)
+			w.Header().Set("Authorization", token)
+		}
 	})
 	http.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 		credentials := Credentials{}
 		json.NewDecoder(r.Body).Decode(&credentials)
+		if !login(credentials) {
+
+		} else {
+			token := generateJwtToken(credentials.Username)
+			w.Header().Set("Authorization", token)
+		}
+
+		w.Write([]byte(strconv.FormatBool(login(credentials))))
 	})
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "websocket2.html")
@@ -174,11 +216,10 @@ func initHttpListeners() {
 		http.ServeFile(w, r, "websocket2.html")
 	})
 
-	http.ListenAndServe(":8080", nil)
+	http.ListenAndServe(":8095", nil)
 }
 
 func main() {
-	// todo: create connection pool
 	initBroadcastId()
 	initWebSocketListeners()
 	initHttpListeners()
