@@ -1,3 +1,6 @@
+GOROOT=/usr/lib/go-1.10
+GOPATH=/user/local/go
+
 docker:
 sudo docker run -e 'ACCEPT_EULA=Y' -e 'SA_PASSWORD=testtest1!' -p 1433:1433 -d mcr.microsoft.com/mssql/server:2017-CU8-ubuntu
 
