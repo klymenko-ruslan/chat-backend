@@ -22,11 +22,17 @@ const broadcastName = "broadcast"
 
 // todo: list of users for chats
 const SQL_SELECT_USERS = "select username, password, is_male from users"
+const SQL_SELECT_ALL_FROM_USERS_WHERE_ID_IN = "select * from users where id in($1)"
 const SQL_SELECT_USERNAME_BY_ID = "select username from users where id = $1"
 const SQL_SELECT_USER_BY_USERNAME = "select * from users where username = $1"
 const SQL_SELECT_USER_ID_BY_USERNAME = "select id from users where username = $1"
 const SQL_INSERT_USER = "insert into users(username, password, is_male) values($1, $2, $3)"
 const SQL_INSERT_MESSAGE = "insert into messages(from_user_id, to_user_id, text, time) values($1, $2, $3, DATEADD(MILLISECOND, $4 % 1000, DATEADD(SECOND, $4 / 1000, '19700101')))"
+
+const SQL_SELECT_ACTIVE_USERS = "select * from users where id in (select user_id from active_users)"
+const SQL_INSERT_ACTIVE_USER = "insert into active_users values($1)"
+const SQL_DELETE_ACTIVE_USERS = "delete from active_users"
+const SQL_DELETE_ACTIVE_USER = "delete from active_users where user_id = $1"
 
 var condb = getDatabaseConnection()
 var jwtKey = []byte("my_secret_key")
@@ -47,7 +53,10 @@ type Credentials struct {
 }
 
 type InitMessage struct {
-	UserId int64
+	ConnectedUserId int64
+}
+type DisconnectedMessage struct {
+	DisconnectedUserId int64
 }
 type Message struct {
 	From         int64
@@ -102,6 +111,35 @@ func getUsernameById(id int64) string {
 	}
 	return username
 }
+func getActiveUsers() []User {
+	rows, err := condb.Query(SQL_SELECT_ACTIVE_USERS)
+	defer rows.Close()
+	if err != nil {
+		fmt.Print(err)
+		log.Print(err)
+	}
+	var users []User
+	for rows.Next() {
+		user := User{}
+		rows.Scan(&user.Id, &user.Username, &user.Password, &user.IsMale)
+		users = append(users, user)
+	}
+	return users
+}
+func deleteActiveUser() {
+	rows, err := condb.Query(SQL_DELETE_ACTIVE_USER)
+	defer rows.Close()
+	if err != nil {
+		fmt.Print(err)
+		log.Print(err)
+	}
+}
+func insertActiveUser(userId int64) {
+	_, err := condb.Exec(SQL_INSERT_ACTIVE_USER, userId)
+	if err != nil {
+		log.Print(err)
+	}
+}
 func initBroadcastId() {
 	rows, err := condb.Query(SQL_SELECT_USER_ID_BY_USERNAME, broadcastName)
 	defer rows.Close()
@@ -134,25 +172,42 @@ func initWebSocketListeners() {
 		for {
 			msgType, msg, err := conn.ReadMessage()
 			if err != nil {
-				log.Print(err)
+				deleteActiveUser()
+				fmt.Println("!!!")
+				fmt.Println(err)
+				log.Println(err)
 			}
-			if strings.Contains(string(msg), "userId") {
+			message := string(msg)
+			if strings.Contains(message, "DisconnectedUserId") {
+				disconnectedMessage := DisconnectedMessage{}
+				if err = json.Unmarshal(msg, &disconnectedMessage); err != nil {
+					log.Print("Wrong disconnected message")
+				} else {
+					delete(activeUsers, disconnectedMessage.DisconnectedUserId)
+				}
+			} else if strings.Contains(message, "ConnectedUserId") {
 				initMessage := InitMessage{}
 				if err = json.Unmarshal(msg, &initMessage); err != nil {
 					log.Print("Wrong init message")
 				} else {
+					insertActiveUser(initMessage.ConnectedUserId)
+					//initMessage := InitMessage{}
 					// todo: notify others and return list of active to current
-					// for k, v := range activeUsers {
-					// 	if err = v.WriteMessage(msgType, []byte(initMessage.UserId)); err != nil {
-					// 		log.Print("Can't send message to " + string(k))
-					// 	}
-					// }
-					activeUsers[initMessage.UserId] = conn
+					activeUsers[initMessage.ConnectedUserId] = conn
+
+					activeUsersList := getActiveUsers()
+					response := make(map[string]*[]User)
+					response["activeUsers"] = &activeUsersList
+					messageBytes, _ := json.Marshal(&response)
+					if err = conn.WriteMessage(msgType, messageBytes); err != nil {
+						log.Print("Can't send list to " + string(activeUsersList[0].Id))
+					}
 				}
 			} else {
 				message := Message{}
 				if err = json.Unmarshal(msg, &message); err != nil {
 					log.Print("Wrong normal message")
+					log.Print(string(msg))
 				} else {
 					fmt.Println(message.Text)
 					err := insertMessage(condb, message)
@@ -233,7 +288,13 @@ func initHttpListeners() {
 				w.WriteHeader(http.StatusInternalServerError)
 			} else {
 				token := generateJwtToken(user.Username)
-				w.Write([]byte("{\"token\": \"" + token + "\"}"))
+				loginResponse := LoginResponse{
+					Token:    token,
+					UserId:   user.Id,
+					Username: user.Username,
+				}
+				byteResponse, _ := json.Marshal(loginResponse)
+				w.Write([]byte(byteResponse))
 			}
 		}
 	})
@@ -254,12 +315,6 @@ func initHttpListeners() {
 				w.Write([]byte(byteResponse))
 			}
 		}
-	})
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "websocket2.html")
-	})
-	http.HandleFunc("/2", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "websocket2.html")
 	})
 
 	http.ListenAndServe(":8095", nil)
