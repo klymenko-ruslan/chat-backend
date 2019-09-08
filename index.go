@@ -47,6 +47,10 @@ type User struct {
 	Password string
 	IsMale   bool
 }
+type NewUser struct {
+	NewActiveUserId   int64
+	NewActiveUserName string
+}
 type Credentials struct {
 	Password string
 	Username string
@@ -59,6 +63,7 @@ type DisconnectedMessage struct {
 	DisconnectedUserId int64
 }
 type Message struct {
+	Token        string
 	From         int64
 	FromUsername string
 	To           int64
@@ -126,8 +131,8 @@ func getActiveUsers() []User {
 	}
 	return users
 }
-func deleteActiveUser() {
-	rows, err := condb.Query(SQL_DELETE_ACTIVE_USER)
+func deleteActiveUser(userId int64) {
+	rows, err := condb.Query(SQL_DELETE_ACTIVE_USER, userId)
 	defer rows.Close()
 	if err != nil {
 		fmt.Print(err)
@@ -172,9 +177,6 @@ func initWebSocketListeners() {
 		for {
 			msgType, msg, err := conn.ReadMessage()
 			if err != nil {
-				deleteActiveUser()
-				fmt.Println("!!!")
-				fmt.Println(err)
 				log.Println(err)
 			}
 			message := string(msg)
@@ -183,16 +185,33 @@ func initWebSocketListeners() {
 				if err = json.Unmarshal(msg, &disconnectedMessage); err != nil {
 					log.Print("Wrong disconnected message")
 				} else {
+					deleteActiveUser(disconnectedMessage.DisconnectedUserId)
 					delete(activeUsers, disconnectedMessage.DisconnectedUserId)
+					disconnectedMessageBytes, _ := json.Marshal(disconnectedMessage)
+					for _, v := range activeUsers {
+						if err = v.WriteMessage(msgType, disconnectedMessageBytes); err != nil {
+							log.Print("Can't send disconnected user")
+						}
+					}
 				}
 			} else if strings.Contains(message, "ConnectedUserId") {
 				initMessage := InitMessage{}
 				if err = json.Unmarshal(msg, &initMessage); err != nil {
 					log.Print("Wrong init message")
 				} else {
-					insertActiveUser(initMessage.ConnectedUserId)
-					//initMessage := InitMessage{}
-					// todo: notify others and return list of active to current
+					// todo: notify others
+					newUser := NewUser{
+						NewActiveUserId:   initMessage.ConnectedUserId,
+						NewActiveUserName: getUsernameById(initMessage.ConnectedUserId),
+					}
+					newUserBytes, _ := json.Marshal(newUser)
+					for k, v := range activeUsers {
+						if k != initMessage.ConnectedUserId {
+							if err = v.WriteMessage(msgType, newUserBytes); err != nil {
+								log.Print("Can't send new active user")
+							}
+						}
+					}
 					activeUsers[initMessage.ConnectedUserId] = conn
 
 					activeUsersList := getActiveUsers()
@@ -202,6 +221,7 @@ func initWebSocketListeners() {
 					if err = conn.WriteMessage(msgType, messageBytes); err != nil {
 						log.Print("Can't send list to " + string(activeUsersList[0].Id))
 					}
+					insertActiveUser(initMessage.ConnectedUserId)
 				}
 			} else {
 				message := Message{}
@@ -209,22 +229,23 @@ func initWebSocketListeners() {
 					log.Print("Wrong normal message")
 					log.Print(string(msg))
 				} else {
-					fmt.Println(message.Text)
-					err := insertMessage(condb, message)
-					if err != nil {
-						log.Print(err)
-					} else {
-						message.FromUsername = getUsernameById(message.From)
-						messageBytes, _ := json.Marshal(&message)
-						if message.To == broadcastId {
-							for k, v := range activeUsers {
-								if err = v.WriteMessage(msgType, messageBytes); err != nil {
-									log.Print("Can't send message to " + string(k))
-								}
-							}
+					if checkTokenValidity(message.Token) {
+						err := insertMessage(condb, message)
+						if err != nil {
+							log.Print(err)
 						} else {
-							if err = activeUsers[message.To].WriteMessage(msgType, messageBytes); err != nil {
-								log.Print("Can't send message to " + string(message.To))
+							message.FromUsername = getUsernameById(message.From)
+							messageBytes, _ := json.Marshal(&message)
+							if message.To == broadcastId {
+								for k, v := range activeUsers {
+									if err = v.WriteMessage(msgType, messageBytes); err != nil {
+										log.Print("Can't send message to " + string(k))
+									}
+								}
+							} else {
+								if err = activeUsers[message.To].WriteMessage(msgType, messageBytes); err != nil {
+									log.Print("Can't send message to " + string(message.To))
+								}
 							}
 						}
 					}
@@ -260,7 +281,7 @@ func checkTokenValidity(tknStr string) bool {
 	tkn, _ := jwt.ParseWithClaims(tknStr, claims, func(token *jwt.Token) (interface{}, error) {
 		return jwtKey, nil
 	})
-	return !tkn.Valid
+	return tkn.Valid
 }
 func register(user User) User {
 	password, _ := hashPassword(user.Password)
