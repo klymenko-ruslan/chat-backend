@@ -238,6 +238,7 @@ func initWebSocketListeners() {
 							messageBytes, _ := json.Marshal(&message)
 							if message.To == broadcastId {
 								for k, v := range activeUsers {
+									fmt.Print(123)
 									if err = v.WriteMessage(msgType, messageBytes); err != nil {
 										log.Print("Can't send message to " + string(k))
 									}
@@ -332,6 +333,8 @@ func initHttpListeners() {
 					UserId:   user.Id,
 					Username: user.Username,
 				}
+				fmt.Print(loginResponse.UserId)
+				fmt.Print(loginResponse.Username)
 				byteResponse, _ := json.Marshal(loginResponse)
 				w.Write([]byte(byteResponse))
 			}

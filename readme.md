@@ -10,10 +10,13 @@ sudo docker exec -it f39c9b2056a7 /opt/mssql-tools/bin/sqlcmd -S localhost -U sa
 CREATE DATABASE chat
 GO
 USE chat
-
-
+go
 CREATE TABLE users(id int identity(1,1), username varchar(255), password varchar(255), is_male bit, PRIMARY KEY(id), UNIQUE(username));
+go
 CREATE TABLE active_users(user_id int, FOREIGN KEY(user_id) REFERENCES users(id), UNIQUE(user_id));
+go
 CREATE TABLE messages(id int identity(1,1), from_user_id int, to_user_id int, text varchar(2096), time datetime, PRIMARY KEY(id), FOREIGN KEY(from_user_id) REFERENCES users(id), FOREIGN KEY(to_user_id) REFERENCES users(id));
+go
 INSERT INTO users(username, password, is_male) values('broadcast', '', 1);
+go
 INSERT INTO users(username, password, is_male) values('test', '$2a$14$nmh9tzLv9DEX8Cpx72/ESO2L9ijODdCYQe1aJuLl2qsZNzKB7/key', 1);
