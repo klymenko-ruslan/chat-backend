@@ -37,7 +37,7 @@ const SQL_DELETE_ACTIVE_USER = "delete from active_users where user_id = $1"
 var condb = getDatabaseConnection()
 var jwtKey = []byte("my_secret_key")
 
-var activeUsers = make(map[int64]ConnectionDetails)
+var activeUsers = make(map[int64]*ConnectionDetails)
 
 var broadcastId int64
 
@@ -65,6 +65,7 @@ type Credentials struct {
 
 type InitMessage struct {
 	ConnectedUserId int64
+	Token string
 }
 type DisconnectedMessage struct {
 	DisconnectedUserId int64
@@ -210,35 +211,41 @@ func initWebSocketListeners() {
 					}
 				}
 			} else if strings.Contains(message, "ConnectedUserId") {
-				fmt.Print(message)
 				initMessage := InitMessage{}
 				if err = json.Unmarshal(msg, &initMessage); err != nil {
 					log.Print("Wrong init message")
 				} else {
-					newUser := NewUser{
-						NewActiveUserId:   initMessage.ConnectedUserId,
-						NewActiveUserName: getUsernameById(initMessage.ConnectedUserId),
-					}
-					newUserBytes, _ := json.Marshal(newUser)
-					for k, v := range activeUsers {
-						if k != initMessage.ConnectedUserId {
-							if err = v.conn.WriteMessage(msgType, newUserBytes); err != nil {
-								log.Print("Can't send new active user")
+					username := getUsernameById(initMessage.ConnectedUserId)
+					if username != "" && checkTokenValidity(initMessage.Token) {
+						newUser := NewUser{
+							NewActiveUserId:   initMessage.ConnectedUserId,
+							NewActiveUserName: getUsernameById(initMessage.ConnectedUserId),
+						}
+						newUserBytes, _ := json.Marshal(newUser)
+						for k, v := range activeUsers {
+							if k != initMessage.ConnectedUserId {
+								if err = v.conn.WriteMessage(msgType, newUserBytes); err != nil {
+									log.Print("Can't send new active user")
+								}
 							}
 						}
-					}
-					connectionDetails := ConnectionDetails{
-						conn: *conn,
-						time: time.Now(),
-					}
-					activeUsers[initMessage.ConnectedUserId] = connectionDetails
-					insertActiveUser(initMessage.ConnectedUserId)
-					activeUsersList := getActiveUsers()
-					response := make(map[string]*[]User)
-					response["activeUsers"] = &activeUsersList
-					messageBytes, _ := json.Marshal(&response)
-					if err = conn.WriteMessage(msgType, messageBytes); err != nil {
-						log.Print("Can't send list to " + string(activeUsersList[0].Id))
+						connectionDetails := ConnectionDetails{
+							conn: *conn,
+							time: time.Now(),
+						}
+						activeUsers[initMessage.ConnectedUserId] = &connectionDetails
+						insertActiveUser(initMessage.ConnectedUserId)
+						activeUsersList := getActiveUsers()
+						response := make(map[string]*[]User)
+						response["activeUsers"] = &activeUsersList
+						messageBytes, _ := json.Marshal(&response)
+						if err = conn.WriteMessage(msgType, messageBytes); err != nil {
+							log.Print("Can't send list to " + string(activeUsersList[0].Id))
+						}
+					} else {
+						if err = conn.WriteMessage(msgType, []byte("logout")); err != nil {
+							log.Print("Can't logout")
+						}
 					}
 				}
 			} else if strings.Contains(message, "HeartbeatUserId") {
@@ -247,8 +254,7 @@ func initWebSocketListeners() {
 					log.Print("Wrong heartbeat")
 					log.Print(string(msg))
 				}
-				activeUser := activeUsers[heartbeat.HeartbeatUserId]
-				activeUser.time = time.Now()
+				(activeUsers[heartbeat.HeartbeatUserId]).time = time.Now()
 			} else {
 				message := Message{}
 				if err = json.Unmarshal(msg, &message); err != nil {
@@ -264,7 +270,6 @@ func initWebSocketListeners() {
 							messageBytes, _ := json.Marshal(&message)
 							if message.To == broadcastId {
 								for k, v := range activeUsers {
-									fmt.Print(123)
 									if err = v.conn.WriteMessage(msgType, messageBytes); err != nil {
 										log.Print("Can't send message to " + string(k))
 									}
@@ -369,6 +374,9 @@ func initHttpListeners() {
 	})
 
 	http.ListenAndServe(":8095", nil)
+}
+func updateTime(connectionDetails *ConnectionDetails) {
+	connectionDetails.time = time.Now()
 }
 func checkActiveUsers() {
 	for {
