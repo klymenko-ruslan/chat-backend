@@ -37,10 +37,17 @@ const SQL_DELETE_ACTIVE_USER = "delete from active_users where user_id = $1"
 var condb = getDatabaseConnection()
 var jwtKey = []byte("my_secret_key")
 
-var activeUsers = make(map[int64]*websocket.Conn)
+var activeUsers = make(map[int64]ConnectionDetails)
 
 var broadcastId int64
 
+type ConnectionDetails struct {
+	conn websocket.Conn
+	time time.Time
+}
+type Heartbeat struct {
+	HeartbeatUserId int64
+}
 type User struct {
 	Id       int64
 	Username string
@@ -131,6 +138,14 @@ func getActiveUsers() []User {
 	}
 	return users
 }
+func deleteActiveUsers() {
+	rows, err := condb.Query(SQL_DELETE_ACTIVE_USERS)
+	defer rows.Close()
+	if err != nil {
+		fmt.Print(err)
+		log.Print(err)
+	}
+}
 func deleteActiveUser(userId int64) {
 	rows, err := condb.Query(SQL_DELETE_ACTIVE_USER, userId)
 	defer rows.Close()
@@ -189,17 +204,17 @@ func initWebSocketListeners() {
 					delete(activeUsers, disconnectedMessage.DisconnectedUserId)
 					disconnectedMessageBytes, _ := json.Marshal(disconnectedMessage)
 					for _, v := range activeUsers {
-						if err = v.WriteMessage(msgType, disconnectedMessageBytes); err != nil {
+						if err = v.conn.WriteMessage(msgType, disconnectedMessageBytes); err != nil {
 							log.Print("Can't send disconnected user")
 						}
 					}
 				}
 			} else if strings.Contains(message, "ConnectedUserId") {
+				fmt.Print(message)
 				initMessage := InitMessage{}
 				if err = json.Unmarshal(msg, &initMessage); err != nil {
 					log.Print("Wrong init message")
 				} else {
-					// todo: notify others
 					newUser := NewUser{
 						NewActiveUserId:   initMessage.ConnectedUserId,
 						NewActiveUserName: getUsernameById(initMessage.ConnectedUserId),
@@ -207,13 +222,17 @@ func initWebSocketListeners() {
 					newUserBytes, _ := json.Marshal(newUser)
 					for k, v := range activeUsers {
 						if k != initMessage.ConnectedUserId {
-							if err = v.WriteMessage(msgType, newUserBytes); err != nil {
+							if err = v.conn.WriteMessage(msgType, newUserBytes); err != nil {
 								log.Print("Can't send new active user")
 							}
 						}
 					}
-					activeUsers[initMessage.ConnectedUserId] = conn
-
+					connectionDetails := ConnectionDetails{
+						conn: *conn,
+						time: time.Now(),
+					}
+					activeUsers[initMessage.ConnectedUserId] = connectionDetails
+					insertActiveUser(initMessage.ConnectedUserId)
 					activeUsersList := getActiveUsers()
 					response := make(map[string]*[]User)
 					response["activeUsers"] = &activeUsersList
@@ -221,8 +240,15 @@ func initWebSocketListeners() {
 					if err = conn.WriteMessage(msgType, messageBytes); err != nil {
 						log.Print("Can't send list to " + string(activeUsersList[0].Id))
 					}
-					insertActiveUser(initMessage.ConnectedUserId)
 				}
+			} else if strings.Contains(message, "HeartbeatUserId") {
+				heartbeat := Heartbeat{}
+				if err = json.Unmarshal(msg, &heartbeat); err != nil {
+					log.Print("Wrong heartbeat")
+					log.Print(string(msg))
+				}
+				activeUser := activeUsers[heartbeat.HeartbeatUserId]
+				activeUser.time = time.Now()
 			} else {
 				message := Message{}
 				if err = json.Unmarshal(msg, &message); err != nil {
@@ -239,12 +265,13 @@ func initWebSocketListeners() {
 							if message.To == broadcastId {
 								for k, v := range activeUsers {
 									fmt.Print(123)
-									if err = v.WriteMessage(msgType, messageBytes); err != nil {
+									if err = v.conn.WriteMessage(msgType, messageBytes); err != nil {
 										log.Print("Can't send message to " + string(k))
 									}
 								}
 							} else {
-								if err = activeUsers[message.To].WriteMessage(msgType, messageBytes); err != nil {
+								activeUser := activeUsers[message.To]
+								if err = activeUser.conn.WriteMessage(msgType, messageBytes); err != nil {
 									log.Print("Can't send message to " + string(message.To))
 								}
 							}
@@ -343,9 +370,33 @@ func initHttpListeners() {
 
 	http.ListenAndServe(":8095", nil)
 }
-
-// todo: add filter to check server permisisons
+func checkActiveUsers() {
+	for {
+		time.Sleep(10 * time.Second)
+		now := time.Now()
+		var removedUserIds []int64
+		for k, v := range activeUsers {
+			treshold := v.time.Add(time.Second * 10)
+			if treshold.Before(now) {
+				delete(activeUsers, k)
+				deleteActiveUser(k)
+				removedUserIds = append(removedUserIds, k)
+			}
+		}
+		for _, v := range activeUsers {
+			for _, removedUserId := range removedUserIds {
+				disconnectedMessage := DisconnectedMessage{
+					DisconnectedUserId: removedUserId,
+				}
+				disconnectedMessageBytes, _ := json.Marshal(disconnectedMessage)
+				v.conn.WriteMessage(1, disconnectedMessageBytes)
+			}
+		}
+	}
+}
 func main() {
+	deleteActiveUsers()
+	go checkActiveUsers()
 	initBroadcastId()
 	initWebSocketListeners()
 	initHttpListeners()
