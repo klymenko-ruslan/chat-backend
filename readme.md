@@ -12,7 +12,7 @@ CREATE DATABASE chat
 GO
 USE chat
 go
-CREATE TABLE users(id int identity(1,1), username varchar(255), password varchar(255), is_male bit, PRIMARY KEY(id), UNIQUE(username));
+CREATE TABLE users(id int identity(1,1), username varchar(255) not null, password varchar(255), is_male bit, PRIMARY KEY(id), UNIQUE(username));
 go
 CREATE TABLE active_users(user_id int, FOREIGN KEY(user_id) REFERENCES users(id), UNIQUE(user_id));
 go
