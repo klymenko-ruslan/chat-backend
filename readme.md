@@ -1,11 +1,12 @@
 GOROOT=/usr/lib/go-1.10
 GOPATH=/user/local/go
 
-docker:
+To run application run docker image:
 sudo docker run -e 'ACCEPT_EULA=Y' -e 'SA_PASSWORD=testtest1!' -p 1433:1433 -d mcr.microsoft.com/mssql/server:2017-CU8-ubuntu
 
-sudo docker exec -it f39c9b2056a7 /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P testtest1!
+sudo docker exec -it _dockerProcessId_ /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P testtest1!
 
+DDL SCRIPT:
 
 CREATE DATABASE chat
 GO
@@ -19,4 +20,3 @@ CREATE TABLE messages(id int identity(1,1), from_user_id int, to_user_id int, te
 go
 INSERT INTO users(username, password, is_male) values('broadcast', '', 1);
 go
-INSERT INTO users(username, password, is_male) values('test', '$2a$14$nmh9tzLv9DEX8Cpx72/ESO2L9ijODdCYQe1aJuLl2qsZNzKB7/key', 1);
